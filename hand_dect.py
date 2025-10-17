@@ -1,9 +1,8 @@
 import cv2
 import mediapipe as mp
-import random
-import util
 import pyautogui
 import math
+import util  # your util.py must have get_angle and get_distance
 
 # -----------------------------
 # Initialize Mediapipe Hands
@@ -21,7 +20,7 @@ hands = mpHands.Hands(
 # Screen info and smoothing
 # -----------------------------
 screen_width, screen_height = pyautogui.size()
-sensitivity = 1.5      # pointer speed
+sensitivity = 2      # pointer speed
 noise_threshold = 2    # dead zone in pixels
 history_length = 5     # smoothing frames
 
@@ -30,6 +29,13 @@ hand_start_x, hand_start_y = None, None
 pointer_x, pointer_y = None, None
 hand_history_x = []
 hand_history_y = []
+
+# Gesture state
+gesture_active = False
+
+# Thresholds for fingers side by side
+dx_threshold = 50
+dy_threshold = 40
 
 # -----------------------------
 # Utility functions
@@ -43,12 +49,14 @@ def move_mouse_relative(index_finger_tip):
     x = index_finger_tip.x
     y = index_finger_tip.y
 
+    # Initialize starting positions
     if hand_start_x is None or hand_start_y is None:
         hand_start_x = x
         hand_start_y = y
         pointer_x, pointer_y = pyautogui.position()
         return
 
+    # Add to history for smoothing
     hand_history_x.append(x)
     hand_history_y.append(y)
     x_smooth = sum(hand_history_x[-history_length:]) / min(len(hand_history_x), history_length)
@@ -57,11 +65,13 @@ def move_mouse_relative(index_finger_tip):
     dx = (x_smooth - hand_start_x) * screen_width
     dy = (y_smooth - hand_start_y) * screen_height
 
+    # Dead zone
     if abs(dx) < noise_threshold:
         dx = 0
     if abs(dy) < noise_threshold:
         dy = 0
 
+    # Apply sensitivity
     dx *= sensitivity
     dy *= sensitivity
 
@@ -76,21 +86,32 @@ def move_mouse_relative(index_finger_tip):
 # Gesture detection
 # -----------------------------
 def detect_gesture(frame, hand_landmarks):
+    global gesture_active
+
     if hand_landmarks is None:
+        gesture_active = False
         return
 
     # Extract landmarks
     landmark_list = [(lm.x, lm.y) for lm in hand_landmarks.landmark]
-
     if len(landmark_list) < 21:
+        gesture_active = False
         return
 
     index_tip = hand_landmarks.landmark[mpHands.HandLandmark.INDEX_FINGER_TIP]
     middle_tip = hand_landmarks.landmark[mpHands.HandLandmark.MIDDLE_FINGER_TIP]
 
-    # Fingers side by side check
+    # Fingers side by side check using horizontal and vertical distances
+    dx = abs(index_tip.x - middle_tip.x) * screen_width
     dy = abs(index_tip.y - middle_tip.y) * screen_height
-    if dy < 30:  # threshold
+
+    if dx < dx_threshold*1.5 and dy < dy_threshold*1.5:
+        gesture_active = True
+    else:
+        gesture_active = False
+
+    # Move pointer if gesture active
+    if gesture_active:
         move_mouse_relative(index_tip)
         cv2.putText(frame, "Moving Pointer", (50, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
@@ -128,6 +149,10 @@ def main():
                 hand_landmarks = processed.multi_hand_landmarks[0]
                 draw.draw_landmarks(frame, hand_landmarks, mpHands.HAND_CONNECTIONS)
                 detect_gesture(frame, hand_landmarks)
+            else:
+                # Reset gesture state if no hand detected
+                global gesture_active
+                gesture_active = False
 
             cv2.imshow('Frame', frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
